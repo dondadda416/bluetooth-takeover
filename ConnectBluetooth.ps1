@@ -86,7 +86,7 @@ if ($Setup) {
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
                      -RunLevel Highest -LogonType Interactive
     $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) `
-                     -MultipleInstances IgnoreNew
+                     -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
         -Settings $settings -Force | Out-Null
 
