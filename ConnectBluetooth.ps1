@@ -87,8 +87,18 @@ if ($Setup) {
                      -RunLevel Highest -LogonType Interactive
     $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) `
                      -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
-        -Settings $settings -Force | Out-Null
+
+    try {
+        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
+            -Settings $settings -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host ""
+        Write-Host "  Failed to create scheduled task: $_" -ForegroundColor Red
+        Write-Host "  Cleaning up..." -ForegroundColor Red
+        Remove-Item $configFile -Force -ErrorAction SilentlyContinue
+        Read-Host "  Press Enter to exit"
+        exit 1
+    }
 
     Write-Host "  Setup complete! Double-click ConnectBluetooth.bat any time to reconnect." -ForegroundColor Green
     Write-Host ""
@@ -99,16 +109,33 @@ if ($Setup) {
 # ---------- RUN ----------
 if ($Run) {
 
-    if (-not (Test-Path $configFile)) { exit }
+    if (-not (Test-Path $configFile)) { exit 1 }
     $mac = (Get-Content $configFile -Encoding UTF8).Trim().ToUpper()
-    if (-not $mac) { exit }
+    if (-not $mac) { exit 1 }
+
+    # Validate that the scheduled task still points to this script
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($task) {
+        $taskPath = $task.Actions[0].Arguments
+        if ($taskPath -notlike "*$PSCommandPath*") {
+            # Task points to an old/different script location — re-register
+            $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
+                             -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File `"$PSCommandPath`" -Run"
+            $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+                             -RunLevel Highest -LogonType Interactive
+            $settings  = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) `
+                             -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
+                -Settings $settings -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
 
     # Find all BTHENUM PnP entries for this device's MAC address
     $ids = Get-PnpDevice -Class Bluetooth -ErrorAction SilentlyContinue |
            Where-Object { $_.InstanceId.ToUpper() -match $mac } |
            Select-Object -ExpandProperty InstanceId
 
-    if (-not $ids -or $ids.Count -eq 0) { exit }
+    if (-not $ids -or $ids.Count -eq 0) { exit 1 }
 
     # Disable all entries in parallel
     $procs = @()
